@@ -1,53 +1,23 @@
-# Multi-stage build
-FROM python:3.10 as builder
+FROM ubuntu:20.04
 
-WORKDIR /tmp
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install
-COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
-
-# Final stage
-FROM ubuntu:22.04
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 \
-    python3-pip \
-    libgomp1 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    python3.9 python3-pip libgomp1 libsm6 libxext6 libglib2.0-0 build-essential \
+    libxrender-dev libxkbcommon-x11-0 libdbus-1-3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.9 1
 
 WORKDIR /app
 
-# Copy Python packages from builder
-COPY --from=builder /root/.local /root/.local
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Add local pip to PATH
-ENV PATH=/root/.local/bin:$PATH
-ENV PYTHONPATH=/app:$PYTHONPATH
-
-# Copy application
 COPY app /app/app
 COPY .env.example /app/.env
-
-# Create outputs directory
 RUN mkdir -p /app/outputs
 
-# Expose port
 EXPOSE 8000
+ENV PYTHONUNBUFFERED=1
+ENV PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
-
-# Run application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python3.8", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
