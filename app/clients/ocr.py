@@ -1,6 +1,6 @@
 """OCR client wrapper - exact same pipeline as original script"""
 
-from paddleocr import PPStructureV3
+from paddleocr import PPStructure
 from pathlib import Path
 import json
 from typing import Dict, Any, List
@@ -11,21 +11,21 @@ logger = get_logger("ocr.client")
 
 
 class OCRClient:
-    """Wraps PPStructureV3 with exact settings from original script"""
+    """Wraps PPStructure with exact settings from original script"""
 
     def __init__(self, settings: Settings):
         """Initialize pipeline with exact settings from image_recognition_engine.py"""
-        logger.info(f"Initializing PPStructureV3 with device={settings.ocr_device}, lang={settings.ocr_language}")
+        logger.info(f"Initializing PPStructure with device={settings.ocr_device}, lang={settings.ocr_language}")
 
         self.settings = settings
-        self.pipeline = PPStructureV3(
+        self.pipeline = PPStructure(
             device=settings.ocr_device,                          # "gpu"
             lang=settings.ocr_language,                          # "fr"
             use_doc_orientation_classify=settings.use_doc_orientation_classify,  # True
             use_doc_unwarping=settings.use_doc_unwarping,         # False
             use_textline_orientation=settings.use_textline_orientation,  # False
         )
-        logger.info("PPStructureV3 pipeline initialized successfully")
+        logger.info("PPStructure pipeline initialized successfully")
 
     def process_image(self, image_path: str) -> Dict[str, Any]:
         """Process image and return results matching original output"""
