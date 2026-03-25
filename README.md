@@ -28,7 +28,7 @@ app/
 Settings are managed via environment variables (see `.env.example`):
 
 - `OCR_DEVICE`: "gpu" or "cpu"
-- `OCR_LANGUAGE`: Language code (default: "fr")
+- `OCR_LANGUAGE`: Language code used by `PPStructure` (default: "en")
 - `USE_DOC_ORIENTATION_CLASSIFY`: Enable document orientation detection
 - `USE_DOC_UNWARPING`: Enable document unwarping
 - `USE_TEXTLINE_ORIENTATION`: Enable textline orientation detection
@@ -87,6 +87,7 @@ mkdir -p outputs
 docker run --rm \
   -p 8000:8000 \
   -e OCR_DEVICE=cpu \
+  -e OCR_LANGUAGE=en \
   -v "$(pwd)/outputs:/app/outputs" \
   ocr-engine:latest
 ```
@@ -95,12 +96,12 @@ To preload PaddleOCR models during the image build and keep the runtime filesyst
 
 ```bash
 docker build \
-  --build-arg OCR_LANGUAGE=fr \
+  --build-arg OCR_LANGUAGE=en \
   --build-arg PRELOAD_PADDLE_MODELS=true \
   -t ocr-engine:latest .
 ```
 
-If you change `OCR_LANGUAGE`, rebuild the image with the same `OCR_LANGUAGE` value so the matching PaddleOCR models are baked into the image.
+With `paddleocr==2.7.0.3`, `PPStructure` layout models support `en` and `ch`. If another language is requested, the app falls back to `en` to avoid startup failures.
 
 ## Output Structure
 

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     # OCR Pipeline (EXACT from original)
     ocr_device: str = Field(default="gpu", validation_alias="OCR_DEVICE")
-    ocr_language: str = Field(default="fr", validation_alias="OCR_LANGUAGE")
+    ocr_language: str = Field(default="en", validation_alias="OCR_LANGUAGE")
     use_doc_orientation_classify: bool = Field(default=True, validation_alias="USE_DOC_ORIENTATION_CLASSIFY")
     use_doc_unwarping: bool = Field(default=False, validation_alias="USE_DOC_UNWARPING")
     use_textline_orientation: bool = Field(default=False, validation_alias="USE_TEXTLINE_ORIENTATION")

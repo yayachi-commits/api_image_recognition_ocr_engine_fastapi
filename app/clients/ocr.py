@@ -9,20 +9,41 @@ from ..internal.config import Settings
 from ..internal.logs import get_logger
 
 logger = get_logger("ocr.client")
+PPSTRUCTURE_SUPPORTED_LANGS = {"en", "ch"}
 
 
 class OCRClient:
     """Wraps PPStructure with exact settings from original script"""
 
+    @staticmethod
+    def _resolve_ppstructure_lang(requested_lang: str) -> str:
+        normalized_lang = requested_lang.lower()
+        if normalized_lang in PPSTRUCTURE_SUPPORTED_LANGS:
+            return normalized_lang
+
+        logger.warning(
+            "PPStructure in paddleocr==2.7.0.3 only supports layout models for %s. "
+            "Falling back from '%s' to 'en'.",
+            sorted(PPSTRUCTURE_SUPPORTED_LANGS),
+            requested_lang,
+        )
+        return "en"
+
     def __init__(self, settings: Settings):
         """Initialize pipeline with exact settings from image_recognition_engine.py"""
-        logger.info(f"Initializing PPStructure with device={settings.ocr_device}, lang={settings.ocr_language}")
+        resolved_lang = self._resolve_ppstructure_lang(settings.ocr_language)
+        logger.info(
+            "Initializing PPStructure with device=%s, requested_lang=%s, resolved_lang=%s",
+            settings.ocr_device,
+            settings.ocr_language,
+            resolved_lang,
+        )
 
         self.settings = settings
         self._predict_lock = Lock()
         self.pipeline = PPStructure(
             device=settings.ocr_device,                          # "gpu"
-            lang=settings.ocr_language,                          # "fr"
+            lang=resolved_lang,                                  # layout models support en/ch in this version
             use_doc_orientation_classify=settings.use_doc_orientation_classify,  # True
             use_doc_unwarping=settings.use_doc_unwarping,         # False
             use_textline_orientation=settings.use_textline_orientation,  # False

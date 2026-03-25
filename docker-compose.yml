@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        OCR_LANGUAGE: fr
+        OCR_LANGUAGE: en
         PRELOAD_PADDLE_MODELS: "true"
     container_name: ocr-engine
     init: true
@@ -14,7 +14,7 @@ services:
       PYTHONUNBUFFERED: "1"
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
       OCR_DEVICE: cpu
-      OCR_LANGUAGE: fr
+      OCR_LANGUAGE: en
       OUTPUT_DIR: /app/outputs
       XDG_CACHE_HOME: /tmp/.cache
       MPLCONFIGDIR: /tmp/matplotlib

@@ -1,4 +1,4 @@
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.10
 
 FROM python:${PYTHON_VERSION}-slim AS builder
 
@@ -7,8 +7,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
+    CCACHE_DIR=/tmp/ccache \
+    CCACHE_MAXSIZE=1G \
     VIRTUAL_ENV=/opt/venv \
-    PATH="/opt/venv/bin:${PATH}"
+    PATH="/usr/lib/ccache:/opt/venv/bin:${PATH}"
 
 WORKDIR /build
 
@@ -16,12 +18,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        ccache \
         libgl1 \
         libglib2.0-0 \
         libgomp1 \
         libsm6 \
         libxext6 \
         libxrender1 \
+    && /usr/sbin/update-ccache-symlinks \
+    && mkdir -p "${CCACHE_DIR}" \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m venv "${VIRTUAL_ENV}"
@@ -32,12 +37,17 @@ COPY app ./app
 RUN pip install --upgrade pip setuptools wheel \
     && pip install .
 
-ARG OCR_LANGUAGE=fr
+ARG OCR_LANGUAGE=en
 ARG PRELOAD_PADDLE_MODELS=true
 
 RUN mkdir -p /root/.paddleocr \
     && if [ "${PRELOAD_PADDLE_MODELS}" = "true" ]; then \
-        python -c "from paddleocr import PPStructure; PPStructure(device='cpu', lang='${OCR_LANGUAGE}', use_doc_orientation_classify=True, use_doc_unwarping=False, use_textline_orientation=False)"; \
+        preload_lang="${OCR_LANGUAGE}"; \
+        if [ "${preload_lang}" != "en" ] && [ "${preload_lang}" != "ch" ]; then \
+            echo "PPStructure layout models only support en/ch in paddleocr==2.7.0.3; falling back to en for model preload."; \
+            preload_lang="en"; \
+        fi; \
+        python -c "from paddleocr import PPStructure; PPStructure(device='cpu', lang='${preload_lang}', use_doc_orientation_classify=True, use_doc_unwarping=False, use_textline_orientation=False)"; \
     fi
 
 
@@ -63,7 +73,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HOST=0.0.0.0 \
     PORT=8000 \
     OCR_DEVICE=cpu \
-    OCR_LANGUAGE=fr \
+    OCR_LANGUAGE=en \
     USE_DOC_ORIENTATION_CLASSIFY=true \
     USE_DOC_UNWARPING=false \
     USE_TEXTLINE_ORIENTATION=false \
