@@ -1,0 +1,17 @@
+.git
+.gitignore
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.venv_cached/
+__pycache__/
+*.py[cod]
+*.so
+.DS_Store
+outputs/
+.env
+DOCKERFILE_SECURITY.md
+DOCKER_USAGE.md
+script_install.md
+toto

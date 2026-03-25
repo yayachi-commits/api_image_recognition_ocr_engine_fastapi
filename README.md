@@ -72,7 +72,7 @@ Health check endpoint.
 
 ### Install dependencies
 ```bash
-pip install -r requirements.txt
+pip install .
 ```
 
 ### Run locally
@@ -82,9 +82,25 @@ uvicorn app.main:app --reload
 
 ### Docker
 ```bash
-docker build -t ocr-engine .
-docker run -p 8000:8000 -v $(pwd)/outputs:/app/outputs ocr-engine
+docker build -t ocr-engine:latest .
+mkdir -p outputs
+docker run --rm \
+  -p 8000:8000 \
+  -e OCR_DEVICE=cpu \
+  -v "$(pwd)/outputs:/app/outputs" \
+  ocr-engine:latest
 ```
+
+To preload PaddleOCR models during the image build and keep the runtime filesystem read-only, keep the default build arg:
+
+```bash
+docker build \
+  --build-arg OCR_LANGUAGE=fr \
+  --build-arg PRELOAD_PADDLE_MODELS=true \
+  -t ocr-engine:latest .
+```
+
+If you change `OCR_LANGUAGE`, rebuild the image with the same `OCR_LANGUAGE` value so the matching PaddleOCR models are baked into the image.
 
 ## Output Structure
 

@@ -1,71 +1,105 @@
-# ============================================================================
-# OCR Engine - Dockerfile sécurisé
-# ============================================================================
-FROM python:3.12-slim
+ARG PYTHON_VERSION=3.12
 
-# Labels métadonnées
-LABEL maintainer="OCR Engine Team" \
-      version="1.0.0" \
-      description="FastAPI OCR Engine with PaddleOCR"
+FROM python:${PYTHON_VERSION}-slim AS builder
 
-# Installation des dépendances avec ccache
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
-    libsm6 \
-    libxext6 \
-    libglib2.0-0 \
-    libgl1 \
-    ccache \
-    ca-certificates \
-    && apt-get clean \
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}"
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Configuration de ccache pour les compilations C/C++
-ENV CC="ccache gcc" \
-    CXX="ccache g++" \
-    CCACHE_DIR=/tmp/ccache \
-    CCACHE_MAXSIZE=1G
+RUN python -m venv "${VIRTUAL_ENV}"
 
-# Créer répertoire ccache
-RUN mkdir -p /tmp/ccache && chmod 755 /tmp/ccache
+COPY pyproject.toml README.md ./
+COPY app ./app
 
-# Variables d'environnement Python
-ENV PYTHONUNBUFFERED=1 \
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install .
+
+ARG OCR_LANGUAGE=fr
+ARG PRELOAD_PADDLE_MODELS=true
+
+RUN mkdir -p /root/.paddleocr \
+    && if [ "${PRELOAD_PADDLE_MODELS}" = "true" ]; then \
+        python -c "from paddleocr import PPStructure; PPStructure(device='cpu', lang='${OCR_LANGUAGE}', use_doc_orientation_classify=True, use_doc_unwarping=False, use_textline_orientation=False)"; \
+    fi
+
+
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+LABEL maintainer="OCR Engine Team" \
+      org.opencontainers.image.title="image-recognition-ocr-engine" \
+      org.opencontainers.image.description="FastAPI OCR Engine with PaddleOCR" \
+      org.opencontainers.image.version="1.0.0"
+
+ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
-    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    HOME=/home/appuser \
+    TMPDIR=/tmp \
+    XDG_CACHE_HOME=/tmp/.cache \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    HOST=0.0.0.0 \
+    PORT=8000 \
+    OCR_DEVICE=cpu \
+    OCR_LANGUAGE=fr \
+    USE_DOC_ORIENTATION_CLASSIFY=true \
+    USE_DOC_UNWARPING=false \
+    USE_TEXTLINE_ORIENTATION=false \
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
+    OUTPUT_DIR=/app/outputs
 
 WORKDIR /app
 
-# Copier requirements et installer les dépendances
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libgl1 \
+        libglib2.0-0 \
+        libgomp1 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+    && groupadd --system --gid 10001 app \
+    && useradd --system --uid 10001 --gid app --create-home --home-dir /home/appuser --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app/outputs /tmp/.cache /tmp/matplotlib \
+    && chown -R appuser:app /app/outputs /tmp/.cache /tmp/matplotlib /home/appuser \
+    && chmod 755 /app /app/outputs /home/appuser \
+    && rm -rf /var/lib/apt/lists/*
 
-# Créer utilisateur non-root
-RUN useradd -m -u 1001 -s /sbin/nologin appuser
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:app /root/.paddleocr /home/appuser/.paddleocr
 
-# Créer répertoires avec permissions correctes
-RUN mkdir -p /app/outputs && \
-    chmod 755 /app && \
-    chmod 755 /app/outputs && \
-    chown -R appuser:root /app
+RUN find /opt/venv -type d -name "__pycache__" -prune -exec rm -rf {} + \
+    && chmod -R a=rX /opt/venv \
+    && chmod -R u=rwX,go=rX /home/appuser/.paddleocr
 
-# Copier l'application
-COPY --chown=appuser:root app /app/app
-COPY --chown=appuser:root .env.example /app/.env
-
-# Restreindre les permissions sur l'application
-RUN find /app/app -type f -exec chmod 644 {} \; && \
-    find /app/app -type d -exec chmod 755 {} \; && \
-    chmod 600 /app/.env
-
-# Basculer vers utilisateur non-root
 USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=3).read()" || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

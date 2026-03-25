@@ -1,10 +1,11 @@
 """OCR API routes"""
 
 from fastapi import APIRouter, File, UploadFile, Depends, HTTPException
+from functools import lru_cache
 from pathlib import Path
 import tempfile
 from ..internal.config import Settings, get_settings
-from ..internal.models import OCRResponse, ErrorResponse
+from ..internal.models import OCRResponse
 from ..orchestrator.manager import OCRManager
 from ..internal.logs import get_logger
 
@@ -13,9 +14,15 @@ logger = get_logger("router.ocr")
 router = APIRouter(prefix="/api/v1/ocr", tags=["ocr"])
 
 
-def get_ocr_manager(settings: Settings = Depends(get_settings)) -> OCRManager:
+@lru_cache(maxsize=1)
+def _get_cached_ocr_manager() -> OCRManager:
+    """Keep a single OCR pipeline per process to avoid costly reinitialization."""
+    return OCRManager(get_settings())
+
+
+def get_ocr_manager(_: Settings = Depends(get_settings)) -> OCRManager:
     """Dependency: get OCR manager instance"""
-    return OCRManager(settings)
+    return _get_cached_ocr_manager()
 
 
 @router.post("/process", response_model=OCRResponse)

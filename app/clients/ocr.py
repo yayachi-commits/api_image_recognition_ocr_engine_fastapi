@@ -3,6 +3,7 @@
 from paddleocr import PPStructure
 from pathlib import Path
 import json
+from threading import Lock
 from typing import Dict, Any, List
 from ..internal.config import Settings
 from ..internal.logs import get_logger
@@ -18,6 +19,7 @@ class OCRClient:
         logger.info(f"Initializing PPStructure with device={settings.ocr_device}, lang={settings.ocr_language}")
 
         self.settings = settings
+        self._predict_lock = Lock()
         self.pipeline = PPStructure(
             device=settings.ocr_device,                          # "gpu"
             lang=settings.ocr_language,                          # "fr"
@@ -30,7 +32,10 @@ class OCRClient:
     def process_image(self, image_path: str) -> Dict[str, Any]:
         """Process image and return results matching original output"""
         logger.info(f"Processing image: {image_path}")
-        results = self.pipeline.predict(image_path)
+        # PPStructure initialization is expensive, so the pipeline is reused.
+        # The lock keeps concurrent requests from corrupting shared native state.
+        with self._predict_lock:
+            results = self.pipeline.predict(image_path)
         logger.info(f"OCR completed: {len(results)} pages")
         return self._parse_results(results)
 

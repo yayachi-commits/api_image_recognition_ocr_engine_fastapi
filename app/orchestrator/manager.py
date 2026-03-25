@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Dict, Any
 import uuid
+from fastapi.concurrency import run_in_threadpool
 from ..clients.ocr import OCRClient
 from ..internal.config import Settings
 from ..internal.logs import get_logger
@@ -46,13 +47,18 @@ class OCRManager:
         try:
             # Process the image
             logger.info(f"[{request_id}] Running OCR pipeline...")
-            parsed_results = self.ocr_client.process_image(image_path)
+            parsed_results = await run_in_threadpool(self.ocr_client.process_image, image_path)
 
             # Save results to output directory
             output_dir = Path(self.settings.output_dir)
             image_name = path.stem
             logger.info(f"[{request_id}] Saving results to {output_dir}")
-            final_results = self.ocr_client.save_results(parsed_results, image_name, output_dir)
+            final_results = await run_in_threadpool(
+                self.ocr_client.save_results,
+                parsed_results,
+                image_name,
+                output_dir,
+            )
 
             logger.info(f"[{request_id}] ✓ Processing completed successfully")
             return {
