@@ -1,44 +1,39 @@
-version: '3.8'
-
 services:
   ocr-engine:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        PYTHON_VERSION: "3.10"
+        APP_UID: "${UID:-1000}"
+        APP_GID: "${GID:-1000}"
+        PRELOAD_PADDLE_MODELS: "true"
+        PRELOAD_OCR_LANGUAGE: "fr"
     container_name: ocr-engine
+    environment:
+      OCR_DEVICE: cpu
+      OCR_LANGUAGE: fr
+      OUTPUT_DIR: /app/outputs
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      HOME: /home/appuser
+      XDG_CACHE_HOME: /tmp/.cache
+      MPLCONFIGDIR: /tmp/matplotlib
     ports:
       - "8000:8000"
-    environment:
-      - PYTHONUNBUFFERED=1
-      - PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
     volumes:
-      # Montage du répertoire outputs pour l'accès hôte (read-write)
-      - ./outputs:/app/outputs:rw
+      - ./outputs:/app/outputs
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health').read()"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 5s
-    restart: unless-stopped
-    # Limiter les ressources système
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 4G
-        reservations:
-          cpus: '1'
-          memory: 2G
-    # Options de sécurité supplémentaires
+      start_period: 15s
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - NET_BIND_SERVICE
-    # Lecture seule pour le système de fichiers (sauf /app/outputs)
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /run
+    restart: unless-stopped

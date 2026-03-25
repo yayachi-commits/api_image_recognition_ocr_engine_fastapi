@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
 
     # OCR Pipeline (EXACT from original)
-    ocr_device: str = Field(default="gpu", validation_alias="OCR_DEVICE")
+    ocr_device: str = Field(default="cpu", validation_alias="OCR_DEVICE")
     ocr_language: str = Field(default="fr", validation_alias="OCR_LANGUAGE")
     use_doc_orientation_classify: bool = Field(default=True, validation_alias="USE_DOC_ORIENTATION_CLASSIFY")
     use_doc_unwarping: bool = Field(default=False, validation_alias="USE_DOC_UNWARPING")

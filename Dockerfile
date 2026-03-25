@@ -1,71 +1,122 @@
-# ============================================================================
-# OCR Engine - Dockerfile sécurisé
-# ============================================================================
-FROM python:3.12-slim
+# syntax=docker/dockerfile:1.7
 
-# Labels métadonnées
-LABEL maintainer="OCR Engine Team" \
-      version="1.0.0" \
-      description="FastAPI OCR Engine with PaddleOCR"
+ARG PYTHON_VERSION=3.10
 
-# Installation des dépendances avec ccache
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgomp1 \
-    libsm6 \
-    libxext6 \
-    libglib2.0-0 \
-    libgl1 \
-    ccache \
-    ca-certificates \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:${PYTHON_VERSION}-slim AS builder
 
-# Configuration de ccache pour les compilations C/C++
-ENV CC="ccache gcc" \
-    CXX="ccache g++" \
-    CCACHE_DIR=/tmp/ccache \
-    CCACHE_MAXSIZE=1G
+ARG PRELOAD_PADDLE_MODELS=true
+ARG PRELOAD_OCR_LANGUAGE=fr
 
-# Créer répertoire ccache
-RUN mkdir -p /tmp/ccache && chmod 755 /tmp/ccache
-
-# Variables d'environnement Python
-ENV PYTHONUNBUFFERED=1 \
+ENV DEBIAN_FRONTEND=noninteractive \
+    VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/lib/ccache:$PATH \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
+    XDG_CACHE_HOME=/tmp/.cache \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    CCACHE_DIR=/tmp/ccache
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        ccache \
+        ca-certificates \
+        libgomp1 \
+        libsm6 \
+        libxext6 \
+        libglib2.0-0 \
+        libgl1 \
+    && update-ccache-symlinks \
+    && python -m venv "${VIRTUAL_ENV}" \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copier requirements et installer les dépendances
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml README.md ./
 
-# Créer utilisateur non-root
-RUN useradd -m -u 1001 -s /sbin/nologin appuser
+RUN python - <<'PY'
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
 
-# Créer répertoires avec permissions correctes
-RUN mkdir -p /app/outputs && \
-    chmod 755 /app && \
-    chmod 755 /app/outputs && \
-    chown -R appuser:root /app
+data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+deps = data["project"]["dependencies"]
+subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+subprocess.check_call([sys.executable, "-m", "pip", "install", *deps])
+PY
 
-# Copier l'application
-COPY --chown=appuser:root app /app/app
-COPY --chown=appuser:root .env.example /app/.env
+COPY app ./app
 
-# Restreindre les permissions sur l'application
-RUN find /app/app -type f -exec chmod 644 {} \; && \
-    find /app/app -type d -exec chmod 755 {} \; && \
-    chmod 600 /app/.env
+RUN python -m pip install --no-deps .
 
-# Basculer vers utilisateur non-root
+RUN mkdir -p /root/.paddleocr \
+    && if [ "${PRELOAD_PADDLE_MODELS}" = "true" ]; then \
+        python - <<PY
+from paddleocr import PPStructure
+
+lang = "${PRELOAD_OCR_LANGUAGE}".lower()
+if lang not in {"en", "ch"}:
+    lang = "en"
+
+PPStructure(
+    device="cpu",
+    lang=lang,
+    use_doc_orientation_classify=True,
+    use_doc_unwarping=False,
+    use_textline_orientation=False,
+)
+PY
+    ; fi
+
+
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG APP_UID=1000
+ARG APP_GID=1000
+
+ENV VIRTUAL_ENV=/opt/venv \
+    PATH=/opt/venv/bin:/usr/lib/ccache:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
+    HOME=/home/appuser \
+    XDG_CACHE_HOME=/tmp/.cache \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    OCR_DEVICE=cpu \
+    OCR_LANGUAGE=fr \
+    OUTPUT_DIR=/app/outputs
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ccache \
+        ca-certificates \
+        libgomp1 \
+        libsm6 \
+        libxext6 \
+        libglib2.0-0 \
+        libgl1 \
+    && groupadd --gid "${APP_GID}" appuser \
+    && useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --home-dir /home/appuser --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app/outputs /tmp/.cache /tmp/matplotlib /home/appuser/.paddleocr \
+    && chown -R appuser:appuser /app /tmp/.cache /tmp/matplotlib /home/appuser \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder --chown=appuser:appuser /root/.paddleocr /home/appuser/.paddleocr
+
 USER appuser
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()" || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

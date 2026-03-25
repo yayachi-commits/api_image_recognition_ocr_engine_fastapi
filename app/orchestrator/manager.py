@@ -1,8 +1,9 @@
 """OCR processing orchestrator - coordinates the OCR workflow"""
 
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import uuid
+from fastapi.concurrency import run_in_threadpool
 from ..clients.ocr import OCRClient
 from ..internal.config import Settings
 from ..internal.logs import get_logger
@@ -19,7 +20,7 @@ class OCRManager:
         self.ocr_client = OCRClient(settings)
         logger.info("OCRManager initialized")
 
-    async def process_image(self, image_path: str) -> Dict[str, Any]:
+    async def process_image(self, image_path: str, output_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Process a single image through the OCR pipeline
 
@@ -46,13 +47,18 @@ class OCRManager:
         try:
             # Process the image
             logger.info(f"[{request_id}] Running OCR pipeline...")
-            parsed_results = self.ocr_client.process_image(image_path)
+            parsed_results = await run_in_threadpool(self.ocr_client.process_image, image_path)
 
             # Save results to output directory
             output_dir = Path(self.settings.output_dir)
-            image_name = path.stem
+            image_name = output_name or path.stem
             logger.info(f"[{request_id}] Saving results to {output_dir}")
-            final_results = self.ocr_client.save_results(parsed_results, image_name, output_dir)
+            final_results = await run_in_threadpool(
+                self.ocr_client.save_results,
+                parsed_results,
+                image_name,
+                output_dir,
+            )
 
             logger.info(f"[{request_id}] ✓ Processing completed successfully")
             return {

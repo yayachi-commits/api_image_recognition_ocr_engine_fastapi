@@ -1,26 +1,98 @@
 """OCR client wrapper - exact same pipeline as original script"""
 
-from paddleocr import PPStructure
-from pathlib import Path
+from copy import deepcopy
 import json
-from typing import Dict, Any, List
+from pathlib import Path
+from threading import Lock
+from typing import Any, Dict, List
+
+from bs4 import BeautifulSoup
+from paddleocr import PPStructure, save_structure_res
+
 from ..internal.config import Settings
 from ..internal.logs import get_logger
 
 logger = get_logger("ocr.client")
+PPSTRUCTURE_SUPPORTED_LANGS = {"en", "ch"}
 
 
 class OCRClient:
     """Wraps PPStructure with exact settings from original script"""
 
+    @staticmethod
+    def _resolve_ppstructure_lang(requested_lang: str) -> str:
+        normalized_lang = requested_lang.lower()
+        if normalized_lang in PPSTRUCTURE_SUPPORTED_LANGS:
+            return normalized_lang
+
+        logger.warning(
+            "PPStructure layout models only support %s in paddleocr==2.7.0.3. "
+            "Falling back from '%s' to 'en'.",
+            sorted(PPSTRUCTURE_SUPPORTED_LANGS),
+            requested_lang,
+        )
+        return "en"
+
+    @staticmethod
+    def _extract_text_from_region(region: Dict[str, Any]) -> str:
+        region_result = region.get("res")
+        if isinstance(region_result, list):
+            texts = []
+            for item in region_result:
+                if isinstance(item, dict):
+                    text = item.get("text")
+                    if text:
+                        texts.append(text)
+            return "\n".join(texts)
+
+        if isinstance(region_result, dict):
+            html = region_result.get("html")
+            if html:
+                return BeautifulSoup(html, "html.parser").get_text("\n", strip=True)
+
+        return ""
+
+    @staticmethod
+    def _make_json_serializable(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: OCRClient._make_json_serializable(item)
+                for key, item in value.items()
+                if key != "img"
+            }
+        if isinstance(value, list):
+            return [OCRClient._make_json_serializable(item) for item in value]
+        if isinstance(value, tuple):
+            return [OCRClient._make_json_serializable(item) for item in value]
+        if hasattr(value, "tolist"):
+            try:
+                return OCRClient._make_json_serializable(value.tolist())
+            except TypeError:
+                pass
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except (TypeError, ValueError):
+                pass
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return str(value)
+
     def __init__(self, settings: Settings):
         """Initialize pipeline with exact settings from image_recognition_engine.py"""
-        logger.info(f"Initializing PPStructure with device={settings.ocr_device}, lang={settings.ocr_language}")
+        resolved_lang = self._resolve_ppstructure_lang(settings.ocr_language)
+        logger.info(
+            "Initializing PPStructure with device=%s, requested_lang=%s, resolved_lang=%s",
+            settings.ocr_device,
+            settings.ocr_language,
+            resolved_lang,
+        )
 
         self.settings = settings
+        self._predict_lock = Lock()
         self.pipeline = PPStructure(
             device=settings.ocr_device,                          # "gpu"
-            lang=settings.ocr_language,                          # "fr"
+            lang=resolved_lang,                                  # layout models only support en/ch here
             use_doc_orientation_classify=settings.use_doc_orientation_classify,  # True
             use_doc_unwarping=settings.use_doc_unwarping,         # False
             use_textline_orientation=settings.use_textline_orientation,  # False
@@ -30,7 +102,12 @@ class OCRClient:
     def process_image(self, image_path: str) -> Dict[str, Any]:
         """Process image and return results matching original output"""
         logger.info(f"Processing image: {image_path}")
-        results = self.pipeline.predict(image_path)
+        with self._predict_lock:
+            results = self.pipeline(image_path)
+
+        if isinstance(results, dict):
+            results = [results]
+
         logger.info(f"OCR completed: {len(results)} pages")
         return self._parse_results(results)
 
@@ -38,26 +115,40 @@ class OCRClient:
         """Parse pipeline results matching original script logic"""
         pages = []
 
-        for idx, res in enumerate(results):
-            page_num = idx + 1
-            page_prefix = f"image_{page_num}"
+        if not results:
+            return {
+                "pages": [{
+                    "page_number": 1,
+                    "text": "",
+                    "raw_results": [],
+                    "page_prefix": "image_1",
+                }],
+                "total_pages": 1,
+            }
 
-            # Extract text from parsing_res_list (exact from original)
+        pages_by_index: Dict[int, List[Dict[str, Any]]] = {}
+        for region in results:
+            page_index = int(region.get("img_idx", 0))
+            pages_by_index.setdefault(page_index, []).append(region)
+
+        for page_offset, page_index in enumerate(sorted(pages_by_index), start=1):
+            page_regions = pages_by_index[page_index]
             text_output = []
-            for block in res.get("parsing_res_list", []):
-                if hasattr(block, 'content') and block.content:
-                    text_output.append(block.content)
+            for region in page_regions:
+                text = self._extract_text_from_region(region)
+                if text:
+                    text_output.append(text)
 
             pages.append({
-                "page_number": page_num,
+                "page_number": page_offset,
                 "text": "\n".join(text_output),
-                "raw_result": res,
-                "page_prefix": page_prefix
+                "raw_results": page_regions,
+                "page_prefix": f"image_{page_offset}",
             })
 
         return {
             "pages": pages,
-            "total_pages": len(results)
+            "total_pages": len(pages)
         }
 
     def save_results(self, parsed_results: Dict, image_name: str, output_dir: Path) -> Dict[str, Any]:
@@ -72,41 +163,41 @@ class OCRClient:
 
         for page_data in parsed_results["pages"]:
             page_prefix = page_data["page_prefix"]
-            res = page_data["raw_result"]
+            page_results = page_data["raw_results"]
 
-            # 1. Save JSON (exact from original)
+            page_structure_dir = image_outputs_dir / page_prefix
+            generated_images = []
+
+            try:
+                save_structure_res(
+                    deepcopy(page_results),
+                    str(image_outputs_dir),
+                    page_prefix,
+                    img_idx=page_data["page_number"] - 1,
+                )
+                for img_file in sorted(page_structure_dir.rglob("*.jpg")) + sorted(page_structure_dir.rglob("*.png")):
+                    generated_images.append(str(img_file.relative_to(output_dir.parent)))
+            except Exception as exc:
+                logger.warning("Could not save structure artifacts for %s: %s", page_prefix, exc)
+
+            # 1. Save JSON
             json_path = image_outputs_dir / f"{page_prefix}.json"
-            res.save_to_json(save_path=str(json_path))
+            json_payload = {
+                "page_number": page_data["page_number"],
+                "text": page_data["text"],
+                "regions": self._make_json_serializable(page_results),
+                "generated_images": generated_images,
+            }
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(json_payload, f, indent=4, ensure_ascii=False)
             page_data["json_file"] = str(json_path.relative_to(output_dir.parent))
 
-            # 2. Save visualizations (exact from original)
-            temp_dir = image_outputs_dir / ".temp"
-            temp_dir.mkdir(parents=True, exist_ok=True)
-            res.save_to_img(save_path=str(temp_dir))
-
-            generated_images = []
-            if temp_dir.exists():
-                for img_file in sorted(temp_dir.glob("*.jpg")) + sorted(temp_dir.glob("*.png")):
-                    new_name = f"{img_file.stem}_{page_prefix}{img_file.suffix}"
-                    new_path = image_outputs_dir / new_name
-                    img_file.rename(new_path)
-                    generated_images.append(str(new_path.relative_to(output_dir.parent)))
-                temp_dir.rmdir()
-
-            page_data["generated_images"] = generated_images
-
-            # 3. Save text (exact from original)
+            # 2. Save text
             txt_path = image_outputs_dir / f"{page_prefix}.txt"
             with open(txt_path, "w", encoding="utf-8") as f:
                 f.write(page_data["text"])
             page_data["text_file"] = str(txt_path.relative_to(output_dir.parent))
-
-            # 4. Update JSON with image references (exact from original)
-            with open(json_path, "r", encoding="utf-8") as f:
-                json_data = json.load(f)
-            json_data["generated_images"] = generated_images
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(json_data, f, indent=4, ensure_ascii=False)
+            page_data["generated_images"] = generated_images
 
             logger.info(f"✓ Saved outputs for {page_prefix}")
             if generated_images:
