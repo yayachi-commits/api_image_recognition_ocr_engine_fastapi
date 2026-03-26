@@ -26,7 +26,7 @@ class OCRClient:
             return normalized_lang
 
         logger.warning(
-            "PPStructure layout models only support %s in paddleocr==2.7.0.3. "
+            "PPStructure layout models only support %s in the current PaddleOCR 2.x pipeline. "
             "Falling back from '%s' to 'en'.",
             sorted(PPSTRUCTURE_SUPPORTED_LANGS),
             requested_lang,
