@@ -7,7 +7,7 @@ from threading import Lock
 from typing import Any, Dict, List
 
 from bs4 import BeautifulSoup
-from paddleocr import PPStructure, save_structure_res
+from paddleocr import PPStructure, PaddleOCR, save_structure_res
 
 from ..internal.config import Settings
 from ..internal.logs import get_logger
@@ -53,6 +53,29 @@ class OCRClient:
         return ""
 
     @staticmethod
+    def _extract_text_pages_from_ocr_results(ocr_results: Any) -> List[str]:
+        if not isinstance(ocr_results, list):
+            return []
+
+        pages = []
+        for page in ocr_results:
+            lines = []
+            if isinstance(page, list):
+                for item in page:
+                    if not isinstance(item, (list, tuple)) or len(item) < 2:
+                        continue
+
+                    rec_result = item[1]
+                    if isinstance(rec_result, (list, tuple)) and rec_result:
+                        text = rec_result[0]
+                        if text:
+                            lines.append(str(text))
+
+            pages.append("\n".join(lines))
+
+        return pages
+
+    @staticmethod
     def _make_json_serializable(value: Any) -> Any:
         if isinstance(value, dict):
             return {
@@ -89,7 +112,10 @@ class OCRClient:
         )
 
         self.settings = settings
-        self._predict_lock = Lock()
+        self.requested_lang = settings.ocr_language.lower()
+        self.structure_lang = resolved_lang
+        self._structure_lock = Lock()
+        self._text_lock = Lock()
         self.pipeline = PPStructure(
             device=settings.ocr_device,                          # "gpu"
             lang=resolved_lang,                                  # layout models only support en/ch here
@@ -99,31 +125,58 @@ class OCRClient:
         )
         logger.info("PPStructure pipeline initialized successfully")
 
+        self.text_pipeline = None
+        if self.requested_lang != self.structure_lang:
+            logger.info(
+                "Initializing PaddleOCR text pipeline with requested_lang=%s for OCR text extraction",
+                self.requested_lang,
+            )
+            self.text_pipeline = PaddleOCR(
+                use_angle_cls=False,
+                lang="fr",
+                use_gpu=settings.ocr_device.lower() == "gpu",
+                show_log=False,
+            )
+            logger.info("PaddleOCR text pipeline initialized successfully")
+
     def process_image(self, image_path: str) -> Dict[str, Any]:
         """Process image and return results matching original output"""
         logger.info(f"Processing image: {image_path}")
-        with self._predict_lock:
+        with self._structure_lock:
             results = self.pipeline(image_path)
+
+        text_results = None
+        if self.text_pipeline is not None:
+            with self._text_lock:
+                text_results = self.text_pipeline.ocr(image_path, cls=False)
 
         if isinstance(results, dict):
             results = [results]
 
         logger.info(f"OCR completed: {len(results)} pages")
-        return self._parse_results(results)
+        return self._parse_results(results, text_results=text_results)
 
-    def _parse_results(self, results: List) -> Dict[str, Any]:
+    def _parse_results(self, results: List, text_results: Any = None) -> Dict[str, Any]:
         """Parse pipeline results matching original script logic"""
         pages = []
+        text_pages = self._extract_text_pages_from_ocr_results(text_results)
 
         if not results:
+            total_pages = max(1, len(text_pages))
+            if not text_pages:
+                text_pages = [""]
+
             return {
-                "pages": [{
-                    "page_number": 1,
-                    "text": "",
-                    "raw_results": [],
-                    "page_prefix": "image_1",
-                }],
-                "total_pages": 1,
+                "pages": [
+                    {
+                        "page_number": page_number,
+                        "text": text_pages[page_number - 1] if page_number - 1 < len(text_pages) else "",
+                        "raw_results": [],
+                        "page_prefix": f"image_{page_number}",
+                    }
+                    for page_number in range(1, total_pages + 1)
+                ],
+                "total_pages": total_pages,
             }
 
         pages_by_index: Dict[int, List[Dict[str, Any]]] = {}
@@ -139,9 +192,13 @@ class OCRClient:
                 if text:
                     text_output.append(text)
 
+            page_text = "\n".join(text_output)
+            if page_offset - 1 < len(text_pages) and text_pages[page_offset - 1]:
+                page_text = text_pages[page_offset - 1]
+
             pages.append({
                 "page_number": page_offset,
-                "text": "\n".join(text_output),
+                "text": page_text,
                 "raw_results": page_regions,
                 "page_prefix": f"image_{page_offset}",
             })

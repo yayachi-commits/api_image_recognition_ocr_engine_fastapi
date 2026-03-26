@@ -43,7 +43,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 
 RUN mkdir -p /root/.paddleocr \
     && if [ "${PRELOAD_PADDLE_MODELS}" = "true" ]; then \
-        python -c "from paddleocr import PPStructure; lang='${PRELOAD_OCR_LANGUAGE}'.lower(); lang = lang if lang in {'en', 'ch'} else 'en'; PPStructure(device='cpu', lang=lang, use_doc_orientation_classify=True, use_doc_unwarping=False, use_textline_orientation=False)"; \
+        python -c "from paddleocr import PPStructure, PaddleOCR; requested='${PRELOAD_OCR_LANGUAGE}'.lower(); structure_lang = requested if requested in {'en', 'ch'} else 'en'; PPStructure(device='cpu', lang=structure_lang, use_doc_orientation_classify=True, use_doc_unwarping=False, use_textline_orientation=False); requested not in {'en', 'ch'} and PaddleOCR(use_angle_cls=False, lang=requested, use_gpu=False, show_log=False)"; \
     fi
 
 
