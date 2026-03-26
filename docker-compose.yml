@@ -13,7 +13,7 @@ services:
     environment:
       OCR_DEVICE: cpu
       OCR_LANGUAGE: fr
-      OUTPUT_DIR: /app/outputs
+      OUTPUT_DIR: outputs
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
       HOME: /home/appuser
       XDG_CACHE_HOME: /tmp/.cache

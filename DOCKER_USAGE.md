@@ -141,7 +141,7 @@ curl http://localhost:8000/health
 
 ### Tester avec un fichier
 ```bash
-curl -X POST http://localhost:8000/process \
+curl -X POST http://localhost:8000/api/v1/ocr/process \
   -F "file=@/path/to/image.jpg"
 ```
 

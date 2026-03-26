@@ -2,7 +2,7 @@
 
 ARG PYTHON_VERSION=3.10
 
-FROM python:${PYTHON_VERSION}-slim AS builder
+FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
 
 ARG PRELOAD_PADDLE_MODELS=true
 ARG PRELOAD_OCR_LANGUAGE=fr
@@ -36,50 +36,25 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-
-RUN python - <<'PY'
-import subprocess
-import sys
-import tomllib
-from pathlib import Path
-
-data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-deps = data["project"]["dependencies"]
-subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
-subprocess.check_call([sys.executable, "-m", "pip", "install", *deps])
-PY
-
 COPY app ./app
 
-RUN python -m pip install --no-deps .
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install .
 
 RUN mkdir -p /root/.paddleocr \
     && if [ "${PRELOAD_PADDLE_MODELS}" = "true" ]; then \
-        python - <<PY
-from paddleocr import PPStructure
-
-lang = "${PRELOAD_OCR_LANGUAGE}".lower()
-if lang not in {"en", "ch"}:
-    lang = "en"
-
-PPStructure(
-    device="cpu",
-    lang=lang,
-    use_doc_orientation_classify=True,
-    use_doc_unwarping=False,
-    use_textline_orientation=False,
-)
-PY
-    ; fi
+        python -c "from paddleocr import PPStructure; lang='${PRELOAD_OCR_LANGUAGE}'.lower(); lang = lang if lang in {'en', 'ch'} else 'en'; PPStructure(device='cpu', lang=lang, use_doc_orientation_classify=True, use_doc_unwarping=False, use_textline_orientation=False)"; \
+    fi
 
 
-FROM python:${PYTHON_VERSION}-slim AS runtime
+FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
 
 ARG APP_UID=1000
 ARG APP_GID=1000
 
 ENV VIRTUAL_ENV=/opt/venv \
     PATH=/opt/venv/bin:/usr/lib/ccache:$PATH \
+    DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -90,7 +65,7 @@ ENV VIRTUAL_ENV=/opt/venv \
     MPLCONFIGDIR=/tmp/matplotlib \
     OCR_DEVICE=cpu \
     OCR_LANGUAGE=fr \
-    OUTPUT_DIR=/app/outputs
+    OUTPUT_DIR=outputs
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
